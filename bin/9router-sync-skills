@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""
+9router-sync-skills: Sync 9Router capability skills across agent frameworks (Claude, Codex, OpenCode, Pi, Hermes).
+"""
+
+import os
+import sys
+import argparse
+
+SKILLS = [
+    "9router",
+    "9router-chat",
+    "9router-embeddings",
+    "9router-image",
+    "9router-stt",
+    "9router-tts",
+    "9router-video",
+    "9router-web-fetch",
+    "9router-web-search"
+]
+
+DESCRIPTIONS = {
+    "9router": "Entry point for 9Router local/remote gateway.",
+    "9router-chat": "Use when asking an LLM or running chat prompts via 9Router.",
+    "9router-embeddings": "Use when generating vector embeddings via 9Router.",
+    "9router-image": "Use when generating images via 9Router.",
+    "9router-stt": "Use when transcribing audio to text via 9Router STT.",
+    "9router-tts": "Use when converting text to speech via 9Router TTS.",
+    "9router-video": "Use when generating videos via 9Router Grok Imagine.",
+    "9router-web-fetch": "Use when scraping or fetching URL markdown via 9Router.",
+    "9router-web-search": "Use when searching the web or X/Twitter via 9Router.",
+}
+
+def sync_skills(source_dir, canonical_dir, targets, hermes_dir=None):
+    print(f"Syncing skills from {source_dir} to canonical store {canonical_dir}...")
+    for s in SKILLS:
+        src_f = os.path.join(source_dir, s, "SKILL.md")
+        dest_d = os.path.join(canonical_dir, s)
+        dest_f = os.path.join(dest_d, "SKILL.md")
+        if not os.path.exists(src_f):
+            continue
+
+        os.makedirs(dest_d, exist_ok=True)
+        with open(src_f, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        if s in DESCRIPTIONS:
+            lines = content.splitlines()
+            new_lines, in_fm, replaced = [], False, False
+            for l in lines:
+                if l.strip() == "---":
+                    in_fm = not in_fm
+                    new_lines.append(l)
+                elif in_fm and l.startswith("description:") and not replaced:
+                    new_lines.append(f'description: "{DESCRIPTIONS[s]}"')
+                    replaced = True
+                else:
+                    new_lines.append(l)
+            content = "\n".join(new_lines) + "\n"
+
+        with open(dest_f, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        # Symlink across harnesses
+        for target in targets:
+            if not os.path.exists(os.path.dirname(target)):
+                continue
+            os.makedirs(target, exist_ok=True)
+            link_path = os.path.join(target, s)
+            if os.path.islink(link_path) or os.path.exists(link_path):
+                try: os.unlink(link_path)
+                except: pass
+            os.symlink(dest_d, link_path)
+
+        if hermes_dir and os.path.exists(hermes_dir):
+            h_dir = os.path.join(hermes_dir, s)
+            os.makedirs(h_dir, exist_ok=True)
+            h_file = os.path.join(h_dir, "SKILL.md")
+            if os.path.islink(h_file) or os.path.exists(h_file):
+                try: os.unlink(h_file)
+                except: pass
+            os.symlink(dest_f, h_file)
+
+        print(f"  Synced and linked: {s}")
+
+def main():
+    parser = argparse.ArgumentParser(description="Synchronize 9Router skills across AI agent harnesses")
+    parser.add_argument("--source", default=os.path.expanduser("~/opensource/9router/skills"), help="Path to 9router skills")
+    parser.add_argument("--canonical", default=os.path.expanduser("~/.agents/skills"), help="Canonical skills directory")
+    args = parser.parse_args()
+
+    targets = [
+        os.path.expanduser("~/.claude/skills"),
+        os.path.expanduser("~/.codex/skills"),
+        os.path.expanduser("~/.opencode/skills"),
+        os.path.expanduser("~/.config/opencode/skills"),
+        os.path.expanduser("~/.pi/agent/skills")
+    ]
+    hermes_dir = os.path.expanduser("~/.hermes/skills")
+
+    sync_skills(args.source, args.canonical, targets, hermes_dir)
+    print("Skills sync completed!")
+
+if __name__ == "__main__":
+    main()

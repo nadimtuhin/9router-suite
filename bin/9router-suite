@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# 9router-suite master runner
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BIN_DIR="${SCRIPT_DIR}"
+
+echo "=================================================="
+echo "=== 9Router Suite: Daily Auto-Patch & Sync ==="
+echo "=================================================="
+
+# 1. Auto-patch and update 9router
+echo "--> [1/3] Running 9Router PR Discovery & Patcher..."
+"${BIN_DIR}/9router-patcher" "$@"
+
+# 2. Sync free combos
+echo "--> [2/3] Syncing Free-Tier Provider Combos..."
+"${BIN_DIR}/9router-sync-free"
+
+# 3. Sync skills across agent harnesses
+echo "--> [3/3] Syncing Skills to Claude, Codex, OpenCode, Pi, Hermes..."
+"${BIN_DIR}/9router-sync-skills"
+
+echo "=================================================="
+echo "=== 9Router Suite: Finished Successfully! ==="
+echo "=================================================="

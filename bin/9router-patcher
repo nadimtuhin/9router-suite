@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""
+9router-patcher: Automated bug fix & PR discovery, sandbox evaluation, and patching for 9Router.
+"""
+
+import os
+import sys
+import json
+import re
+import subprocess
+import time
+import urllib.request
+import argparse
+
+DEFAULT_ROUTER_DIR = os.path.expanduser("~/opensource/9router")
+
+CORE_TARGET_PATTERNS = [
+    r"\b(antigravity|claude|codex|opencode)\b",
+    r"^(feat|fix)\((antigravity|claude|codex|opencode|cli-tools|pi)\)",
+]
+
+HIGH_PRIORITY_PATTERNS = [
+    r"^fix(\(.*\))?:",
+    r"^feat\((cli-tools|codex|claude|pi|opencode|antigravity|translator|stream|thinking|usage|cache|combo|logger|security|param-support|auth|models)\):",
+]
+
+EXCLUDE_PATTERNS = [
+    r"i18n", r"turkish", r"landing page", r"cool-website", r"DotHoosh", r"table layout", r"drag-to-reorder"
+]
+
+def log(msg):
+    print(f"[{time.strftime('%X')}] {msg}")
+
+def run_cmd(cmd, cwd, check=True, env=None):
+    merged_env = os.environ.copy()
+    if env:
+        merged_env.update(env)
+    return subprocess.run(cmd, cwd=cwd, check=check, capture_output=True, text=True, env=merged_env)
+
+def discover_and_stage_patches(router_dir, patches_dir, limit=60):
+    log("Discovering open high-value bug fixes from decolua/9router...")
+    cmd = ["gh", "pr", "list", "--repo", "decolua/9router", "--state", "open", f"--limit={limit}", "--json", "number,title,url"]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        log("  Failed to fetch PR list via gh CLI")
+        return []
+
+    prs = json.loads(res.stdout)
+    os.makedirs(patches_dir, exist_ok=True)
+    existing_patches = set(os.listdir(patches_dir))
+
+    def get_pr_priority(pr):
+        title = pr.get("title", "")
+        if any(re.search(pat, title, re.IGNORECASE) for pat in CORE_TARGET_PATTERNS):
+            return 0
+        return 1
+
+    prs.sort(key=get_pr_priority)
+
+    tmp_wt = "/tmp/9router-sandbox-eval"
+    if os.path.exists(tmp_wt):
+        subprocess.run(["git", "worktree", "remove", "-f", tmp_wt], cwd=router_dir, capture_output=True)
+    subprocess.run(["git", "worktree", "add", "-d", tmp_wt, "origin/master"], cwd=router_dir, check=True, capture_output=True)
+
+    clean_additions = []
+    try:
+        for p in sorted(existing_patches):
+            if not p.endswith(".patch"): continue
+            p_path = os.path.join(patches_dir, p)
+            chk = subprocess.run(["git", "apply", "--check", p_path], cwd=tmp_wt, capture_output=True)
+            if chk.returncode == 0:
+                subprocess.run(["git", "apply", p_path], cwd=tmp_wt, check=True, capture_output=True)
+
+        for pr in prs:
+            num = pr["number"]
+            title = pr["title"]
+
+            if any(p.startswith(f"{num}") for p in existing_patches):
+                continue
+            if any(re.search(exc, title, re.IGNORECASE) for exc in EXCLUDE_PATTERNS):
+                continue
+            if not any(re.search(pat, title, re.IGNORECASE) for pat in HIGH_PRIORITY_PATTERNS):
+                continue
+
+            diff_res = subprocess.run(["gh", "pr", "diff", str(num), "--repo", "decolua/9router"], capture_output=True)
+            if diff_res.returncode != 0 or not diff_res.stdout:
+                continue
+            patch_bytes = diff_res.stdout
+
+            chk = subprocess.run(["git", "apply", "--check", "-"], input=patch_bytes, cwd=tmp_wt, capture_output=True)
+            if chk.returncode == 0:
+                filename = f"{num}.patch"
+                filepath = os.path.join(patches_dir, filename)
+                with open(filepath, "wb") as f:
+                    f.write(patch_bytes)
+                subprocess.run(["git", "apply", "-"], input=patch_bytes, cwd=tmp_wt, check=True, capture_output=True)
+                clean_additions.append((num, title, filename))
+                log(f"  [DISCOVERED & STAGED] #{num}: {title} -> {filename}")
+    finally:
+        subprocess.run(["git", "worktree", "remove", "-f", tmp_wt], cwd=router_dir, capture_output=True)
+
+    return clean_additions
+
+def apply_patches_and_build(router_dir, patches_dir, node_bin=None):
+    log("Resetting custom-patched branch cleanly to origin/master...")
+    run_cmd(["git", "checkout", "-B", "custom-patched", "origin/master"], cwd=router_dir)
+    run_cmd(["git", "reset", "--hard", "origin/master"], cwd=router_dir)
+    run_cmd(["git", "clean", "-fd", "-e", "auto-patch-9router.py", "-e", "patches/", "-e", "update-and-patch.sh"], cwd=router_dir)
+
+    patches = sorted([p for p in os.listdir(patches_dir) if p.endswith(".patch")])
+
+    def get_patch_priority(name):
+        lower = name.lower()
+        if any(target in lower for target in ["antigravity", "claude", "codex", "opencode"]):
+            return 0
+        return 1
+
+    patches.sort(key=get_patch_priority)
+
+    applied = 0
+    for p in patches:
+        p_path = os.path.join(patches_dir, p)
+        chk = run_cmd(["git", "apply", "--check", p_path], cwd=router_dir, check=False)
+        if chk.returncode == 0:
+            run_cmd(["git", "apply", p_path], cwd=router_dir)
+            applied += 1
+            log(f"  [APPLIED] {p}")
+        else:
+            log(f"  [SKIP CONFLICT] {p}")
+
+    cli_dir = os.path.join(router_dir, "cli")
+    log(f"Building Next.js and CLI bundle ({applied} patches active)...")
+    env = {"PATH": f"{node_bin}:{os.environ['PATH']}"} if node_bin else None
+    run_cmd(["npm", "run", "build"], cwd=cli_dir, env=env)
+
+    log("Installing global 9router CLI...")
+    run_cmd(["npm", "install", "-g", "--ignore-scripts", "."], cwd=cli_dir, env=env)
+
+def restart_service():
+    log("Restarting 9router service...")
+    user_id = os.getuid()
+    launchd_label = "com.9router.autostart"
+    chk_svc = subprocess.run(["launchctl", "print", f"gui/{user_id}/{launchd_label}"], capture_output=True)
+    if chk_svc.returncode == 0:
+        subprocess.run(["launchctl", "kickstart", "-k", f"gui/{user_id}/{launchd_label}"])
+    else:
+        subprocess.run(["pkill", "-f", "9router/cli.js"])
+        subprocess.run(["pkill", "-f", "next-server.*20128"])
+        time.sleep(1)
+        subprocess.Popen(["9router", "--tray", "--skip-update", "--host", "127.0.0.1"])
+
+def run_smoke_test(url="http://127.0.0.1:20128"):
+    log(f"Running smoke test against {url}...")
+    ready = False
+    for _ in range(25):
+        try:
+            with urllib.request.urlopen(f"{url}/api/health", timeout=2) as r:
+                if r.status == 200:
+                    d = json.loads(r.read())
+                    if d.get("ok"):
+                        ready = True
+                        break
+        except Exception:
+            pass
+        time.sleep(1)
+
+    if not ready:
+        raise RuntimeError(f"9router health check timed out on {url}")
+
+    with urllib.request.urlopen(f"{url}/v1/models", timeout=15) as r:
+        d = json.loads(r.read())
+        assert len(d.get("data", [])) > 0, "No models returned"
+
+    log("Smoke test passed successfully!")
+
+def main():
+    parser = argparse.ArgumentParser(description="Automated 9Router Bug Fix & Patch Routine")
+    parser.add_argument("--repo-dir", default=DEFAULT_ROUTER_DIR, help="Path to local 9router git checkout")
+    parser.add_argument("--patches-dir", default=None, help="Directory to store patches")
+    parser.add_argument("--node-bin", default=None, help="Path to node/npm bin directory")
+    parser.add_argument("--no-build", action="store_true", help="Only discover and stage patches, do not build")
+    args = parser.parse_args()
+
+    router_dir = os.path.abspath(args.repo_dir)
+    patches_dir = os.path.abspath(args.patches_dir) if args.patches_dir else os.path.join(router_dir, "patches")
+
+    log("=== Starting 9Router PR Discovery & Patch Routine ===")
+    run_cmd(["git", "fetch", "origin", "master"], cwd=router_dir)
+    discovered = discover_and_stage_patches(router_dir, patches_dir)
+    log(f"Discovered {len(discovered)} patches.")
+
+    if not args.no_build:
+        apply_patches_and_build(router_dir, patches_dir, node_bin=args.node_bin)
+        restart_service()
+        run_smoke_test()
+    log("=== Done ===")
+
+if __name__ == "__main__":
+    main()

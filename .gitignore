@@ -1,0 +1,27 @@
+# System and OS Files
+.DS_Store
+Thumbs.db
+
+# Virtual environments & caches
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Node / Build artifacts
+node_modules/
+dist/
+build/
+.next/
+
+# Logs & temp
+*.log
+tmp/
+/tmp/
+
+# Sensitive
+.env*
+!*.example
+*.key
+*.pem
