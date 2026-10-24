@@ -1,26 +1,31 @@
 # 9router-suite
 
+<p align="center">
+  <img src="assets/banner.png" alt="9Router Suite Banner" width="100%" />
+</p>
+
 Autonomous daily patch management, free-tier LLM discovery, and cross-agent skills distribution for [9Router](https://github.com/decolua/9router).
 
 ---
 
-## Why
+## The Story
 
-9Router moves fast. Upstream contributors open dozens of PRs addressing critical edge cases on providers like Antigravity, Claude, Codex, and OpenCode:
-- Token accounting bugs (double-counting cached prompt tokens)
-- Claude CAIS protobuf thinking signatures getting rejected
-- Tool schema validation mismatches (integers serialized as strings)
-- Missing context window selection causing premature agent compactions
-- Silent process kills affecting neighboring Next.js apps
+If you run multiple autonomous coding agents (Claude Code, Codex, Pi, OpenCode, Hermes) day in and day out, your LLM router is your most critical piece of infrastructure.
 
-Waiting for upstream releases means living with broken provider loops in daily coding sessions. Re-applying PRs by hand or maintaining a diverged Git branch causes constant rebase conflicts.
+When 9Router works, it is brilliant: one endpoint routing across subscriptions, tiered accounts, and free pools with instant failover. But upstream moves at breakneck speed.
 
-`9router-suite` automates the entire lifecycle:
-1. **Automated Bug Fix Discovery**: Discovers open bug fix PRs on `decolua/9router`, ranking core coding agents first (Antigravity, Claude, Codex, OpenCode).
-2. **Sandbox Evaluation**: Evaluates candidate patches against clean `origin/master` in an isolated Git worktree before touching your live setup.
-3. **Clean Build & Rollback**: Compiles the patched Next.js CLI bundle, deploys locally, and auto-rolls back if build or smoke tests fail.
-4. **Free Combo Sync**: Dynamically extracts available free tier models from OpenCode and Cline into aggregated failover combos (`opencode-free`, `cline-free`, `free`).
-5. **Cross-Agent Skills Distribution**: Installs and symlinks 9Router capability skills across Claude Code, Codex CLI, OpenCode, Pi, and Hermes Agent.
+Every single week, critical edge cases break in production:
+- **Token double-counting**: Upstream prompt-cache counters get folded twice, blowing through usage tracking.
+- **Protocol signature rejections**: Claude introduces CAIS protobuf envelopes for thinking signatures, and foreign signatures from fallback combos leak into conversation turns.
+- **Schema mismatches**: Anthropic Draft 2020-12 rejects tool input schemas where integers are serialized as strings (`"1"` instead of `1`).
+- **Context window clipping**: Codex models get forced down to 258k ceilings and trigger premature compactions.
+- **Rogue process termination**: The CLI daemon blindly kills any process named `next-server`, crashing your other web apps on port 3000.
+
+Contributors write fixes for these issues within hours. But waiting for upstream releases means living with broken agent loops for days.
+
+Manually cherry-picking 30+ pull requests or maintaining a divergent git branch is painful: merge conflicts, duplicate diffs when PRs land, and hours wasted compiling by hand.
+
+`9router-suite` was built to solve this once and for all: an unattended system that discovers open bug fix PRs, tests them in an isolated Git sandbox, compiles the Next.js bundle, verifies health endpoints, and syncs capabilities across all your agent harnesses.
 
 ---
 
