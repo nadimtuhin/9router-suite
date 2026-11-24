@@ -9,13 +9,17 @@ on:
 jobs:
   lint-and-syntax:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.13']
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
 
       - name: Syntax check Python tools
         run: |
@@ -26,3 +30,8 @@ jobs:
       - name: Syntax check Bash scripts
         run: |
           bash -n bin/9router-suite
+
+      - name: Run tests
+        run: |
+          python3 -m pip install pytest
+          python3 -m pytest -v
