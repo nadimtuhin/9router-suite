@@ -16,16 +16,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # setup-python no longer ships 3.9 for ubuntu-latest; uv provides any
+      # interpreter version from python-build-standalone.
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: '3.13'
+
+      - name: Install uv
+        run: python3 -m pip install uv
 
       - name: Syntax check Python tools
         run: |
-          python3 -m py_compile bin/9router-patcher
-          python3 -m py_compile bin/9router-sync-free
-          python3 -m py_compile bin/9router-sync-skills
+          for f in bin/9router-patcher bin/9router-sync-free bin/9router-sync-skills; do
+            uv run --no-project --python ${{ matrix.python-version }} python -m py_compile "$f"
+          done
 
       - name: Syntax check Bash scripts
         run: |
@@ -33,5 +38,4 @@ jobs:
 
       - name: Run tests
         run: |
-          python3 -m pip install pytest
-          python3 -m pytest -v
+          uv run --no-project --python ${{ matrix.python-version }} --with pytest python -m pytest -v
