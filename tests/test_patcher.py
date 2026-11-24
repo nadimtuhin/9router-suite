@@ -41,3 +41,19 @@ def test_already_staged_pr_is_skipped(patcher, tmp_path, monkeypatch):
 
     assert patcher.discover_and_stage_patches(str(tmp_path), str(patches)) == []
     assert fetched == []
+
+
+def test_non_pr_patch_with_number_prefix_does_not_hide_pr(patcher, tmp_path, monkeypatch):
+    # Staged PR patches are named exactly "<num>.patch"; a manual patch like
+    # 12-extra.patch is not PR #12 and must not stop it from being discovered.
+    patches = tmp_path / "patches"
+    patches.mkdir()
+    (patches / "12-extra.patch").write_text("")
+    prs = [{"number": 12, "title": "fix(claude): handle empty stream", "url": "u"}]
+    fetched = []
+    monkeypatch.setattr(patcher.subprocess, "run", _fake_run_factory(prs, fetched))
+
+    added = patcher.discover_and_stage_patches(str(tmp_path), str(patches))
+
+    assert [num for num, _, _ in added] == [12]
+    assert (patches / "12.patch").exists()
