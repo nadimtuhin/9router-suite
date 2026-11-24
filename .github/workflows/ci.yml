@@ -9,20 +9,33 @@ on:
 jobs:
   lint-and-syntax:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.13']
     steps:
       - uses: actions/checkout@v4
 
+      # setup-python no longer ships 3.9 for ubuntu-latest; uv provides any
+      # interpreter version from python-build-standalone.
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.13'
+
+      - name: Install uv
+        run: python3 -m pip install uv
 
       - name: Syntax check Python tools
         run: |
-          python3 -m py_compile bin/9router-patcher
-          python3 -m py_compile bin/9router-sync-free
-          python3 -m py_compile bin/9router-sync-skills
+          for f in bin/9router-patcher bin/9router-sync-free bin/9router-sync-skills; do
+            uv run --no-project --python ${{ matrix.python-version }} python -m py_compile "$f"
+          done
 
       - name: Syntax check Bash scripts
         run: |
           bash -n bin/9router-suite
+
+      - name: Run tests
+        run: |
+          uv run --no-project --python ${{ matrix.python-version }} --with pytest python -m pytest -v

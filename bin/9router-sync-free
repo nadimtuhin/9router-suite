@@ -12,12 +12,35 @@ import urllib.request
 import argparse
 import subprocess
 import shutil
+import time
+import urllib.error
 
 DEFAULT_DB_PATH = os.path.expanduser("~/.9router/db/data.sqlite")
 DEFAULT_ROUTER_URL = "http://127.0.0.1:20128"
+OPENCODE_TIMEOUT_SECS = 60
+HTTP_RETRIES = 3
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 def log(msg):
     print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+
+def fetch_json(url, timeout=5, retries=HTTP_RETRIES, backoff=1.0):
+    """GET a JSON document, retrying on connection errors, 429 and 5xx."""
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url), timeout=timeout) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            if e.code not in RETRYABLE_STATUS or attempt == retries:
+                raise
+            retry_after = e.headers.get("Retry-After") if e.headers else None
+            delay = float(retry_after) if retry_after and retry_after.isdigit() else backoff * 2 ** attempt
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            if attempt == retries:
+                raise
+            delay = backoff * 2 ** attempt
+        log(f"  Retrying {url} in {delay:.0f}s (attempt {attempt + 2}/{retries + 1})...")
+        time.sleep(delay)
 
 def sync_opencode_free(db_path, opencode_bin=None):
     log("Checking OpenCode free models...")
@@ -27,7 +50,9 @@ def sync_opencode_free(db_path, opencode_bin=None):
         return []
 
     try:
-        out = subprocess.check_output([binary, "models"], text=True, stderr=subprocess.DEVNULL)
+        out = subprocess.check_output(
+            [binary, "models"], text=True, stderr=subprocess.DEVNULL, timeout=OPENCODE_TIMEOUT_SECS
+        )
     except Exception as e:
         log(f"  Error running '{binary} models': {e}")
         return []
@@ -67,9 +92,7 @@ def sync_opencode_free(db_path, opencode_bin=None):
 def sync_cline_free(db_path, router_url):
     log("Checking Cline free models via 9Router catalog...")
     try:
-        req = urllib.request.Request(f"{router_url}/v1/models")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode())
+        data = fetch_json(f"{router_url}/v1/models")
         all_models = [m["id"] for m in data.get("data", [])]
     except Exception as e:
         log(f"  Catalog fetch error: {e}")
@@ -98,6 +121,7 @@ def update_combo_in_db(db_path, combo_name, models):
     if not models:
         return False
 
+    db = None
     try:
         db = sqlite3.connect(db_path)
         cur = db.cursor()
@@ -139,11 +163,15 @@ def update_combo_in_db(db_path, combo_name, models):
                 log(f"  Linked '{combo_name}' into master 'free' combo.")
 
         db.commit()
-        db.close()
         return True
     except Exception as e:
+        if db is not None:
+            db.rollback()
         log(f"  Database update failed: {e}")
         return False
+    finally:
+        if db is not None:
+            db.close()
 
 def main():
     parser = argparse.ArgumentParser(description="Sync free-tier LLM providers into 9Router combos")
