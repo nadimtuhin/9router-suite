@@ -75,7 +75,7 @@ def discover_and_stage_patches(router_dir, patches_dir, limit=60):
             num = pr["number"]
             title = pr["title"]
 
-            if any(p.startswith(f"{num}") for p in existing_patches):
+            if any(re.match(rf"{num}(?!\d)", p) for p in existing_patches):
                 continue
             if any(re.search(exc, title, re.IGNORECASE) for exc in EXCLUDE_PATTERNS):
                 continue
